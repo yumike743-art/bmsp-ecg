@@ -1,0 +1,36 @@
+dataset:
+  version: "1.0.0"
+  directory: data/mitdb-1.0.0
+  split: configs/split.csv
+  fs_hz: 360
+  lead: MLII
+labels:
+  N: [N, L, R, e, j]
+  S: [A, a, J, S]
+  V: [V, E]
+  F: [F]
+  Q: ['/', f, Q]
+  unmapped_qrs: [B, n, r]
+window_s: [0.25, 0.35]
+filter:
+  prototype_order: 4
+  band_hz: [0.5, 40.0]
+forest:
+  n_estimators: 300
+  min_samples_leaf: 2
+  max_features: sqrt
+  class_weight: balanced_subsample
+  random_state: 877
+  n_jobs: 2
+noise:
+  seed: 260117
+  snr_db: [24, 12, 6, 0]
+  drift_hz: 0.33
+bootstrap:
+  seed: 60818
+  repetitions: 2000
+detection:
+  tolerance_ms: 150
+  learn: true
+  qc_record: '114'
+outputs: outputs

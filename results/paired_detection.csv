@@ -1,0 +1,4 @@
+comparison,delta,lo,hi,subjects,bootstrap_repetitions
+reference_raw_to_filtered,-0.0258063844,-0.0308714686,0.0055923623,21,2000
+same_beats_reference_to_matched,0.0002341725,-0.0037292741,0.0008741805,21,2000
+reference_to_end_to_end,-0.0053873648,-0.0151983962,-0.0020781059,21,2000
