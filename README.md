@@ -1,10 +1,10 @@
 # How Much Does Filtering Help?
 
-This project tests whether a 0.5–40 Hz band-pass helps classify MIT-BIH heartbeats from people absent from training. The two branches are **No external band-pass** and **With external band-pass**. Both subtract a local baseline when calculating morphology features. The noise experiment uses reference beat positions. The primary detector experiment uses XQRS on recordings without added noise.
+Does a 0.5–40 Hz band-pass improve ECG beat classification on held-out MIT-BIH subjects? The two branches are **No external band-pass** and **With external band-pass**. Both subtract a local baseline before measuring waveform shape. The noise experiment fixes beat locations at the annotations, and the main XQRS experiment uses the original recordings without added noise.
 
 ## Results
 
-The full test uses 47,552 N/S/V/F beats from 21 held-out subjects. The paired intervals resample subjects with both models and the injected waveforms fixed.
+The test set contains 47,552 N/S/V/F beats from 21 subjects. The paired bootstrap resamples subjects with both fitted models and noise waveforms fixed.
 
 | Experiment at reference positions | No external band-pass macro-F1 | With external band-pass macro-F1 | Difference |
 | --- | ---: | ---: | ---: |
@@ -12,16 +12,16 @@ The full test uses 47,552 N/S/V/F beats from 21 held-out subjects. The paired in
 | White Gaussian noise, 0 dB | 0.4954 | 0.4835 | −0.0119 |
 | 0.33 Hz baseline drift, 0 dB | 0.5057 | 0.5234 | +0.0177 |
 
-The paired 95% intervals include zero in all nine conditions. On the original recordings, XQRS reached a detection F1 of 0.9978. With the external band-pass, the classification macro-F1 changed from 0.5237 at reference positions to 0.5183 with detection errors included. The post hoc record 213 comparison and the separate 0 dB drift replay are reported in the result tables. [Result tables](results/)
+The paired 95% intervals include zero in all nine conditions. On the original recordings, XQRS reached a detection F1 of 0.9978. With the external band-pass, macro-F1 went from 0.5237 at annotated positions to 0.5183 after counting XQRS misses and extra detections. In a separate XQRS run at 0 dB drift, both branches reached the same detection F1 while end-to-end macro-F1 went from 0.4986 to 0.5191. [Result tables](results/)
 
-![Macro-F1 under two types of noise, with paired subject intervals for filtered minus raw](results/fig_robustness.png)
+![Macro-F1 under two types of noise, with paired subject intervals for the effect of the external band-pass](results/fig_robustness.png)
 
 ## Reproduce on CPU
 
-Use Linux or WSL with Python 3.12 and uv. Clone the fixed submission tag, then run the commands from the project root. [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
+Use Python 3.12 and uv on Linux or WSL. [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
 
 ```bash
-git clone --branch submission-v1 https://github.com/yumike743-art/bmsp-ecg
+git clone --branch submission-v2 https://github.com/yumike743-art/bmsp-ecg
 cd bmsp-ecg
 uv sync --locked
 uv run pytest -q
@@ -33,19 +33,19 @@ uv run python -m bmsp_ecg ablate --config configs/experiment.yaml
 uv run python scripts/verify_results.py outputs/run
 ```
 
-The data command downloads the versioned WFDB header, signal and reference files over HTTPS and compares them to the official SHA-256 list. Valid existing files are reused. With an existing copy, append `--data-dir /path/to/mitdb` to the data, smoke and run commands. `data check` confirms triplets exist and checks the official digests when `SHA256SUMS.txt` is present.
+The fetch command downloads WFDB header, signal and annotation files, checks the official SHA-256 hashes and keeps existing files that pass. For a local copy, use `--data-dir /path/to/mitdb` with the data, smoke, run, stress and ablate commands. `data check` checks that all three files per record exist and verifies hashes when `SHA256SUMS.txt` is present.
 
-The smoke run uses six real recordings and 12 trees per branch. The complete run uses 300 trees per branch. The measured full experiment was 180.5 s with peak process RSS of 812 MiB on Linux x86-64, CPython 3.12.14 and two CPU workers. It excludes dependency setup, source data checks and PDF rendering. See [verification notes](docs/VERIFICATION.md).
+The smoke run uses six recordings and 12 trees per branch. The full experiment uses 300 trees per branch and took 180.5 s with a peak process RSS of 812 MiB on Linux x86-64, CPython 3.12.14 and two CPU workers. This timing covers the experiment after the source-data checks. [Verification notes](docs/VERIFICATION.md)
 
-The stress command reuses the two models from `run`. It injects the same 0 dB drift into the same test cohort, then runs XQRS separately for each branch. It aligns the branches by record and annotated beat sample to compare match status and detected positions. The command below rebuilds the post hoc sensitivity, minority-error and drift alignment tables from saved ledgers.
+The stress command reuses the fitted models, adds identical 0 dB drift to both branches and runs XQRS separately. It pairs the results by record and annotated sample to compare which beats are found and where the detector places them. To rebuild the record 213, minority-error and drift alignment tables from the saved predictions and detections, run the following command.
 
 ```bash
 uv run python -m bmsp_ecg analyze --config configs/experiment.yaml
 ```
 
-The exploratory ablation command fits RR-only and waveform-only forests to the original filtered training beats. It uses the same forest configuration and seed and evaluates the held-out reference beats without added noise. The full-feature row uses the original saved predictions.
+The ablation fits RR-only and waveform-only forests to the original filtered training beats with the same configuration and seed. It scores them at annotated test positions without added noise and uses the saved full-feature predictions for comparison.
 
-Pass the same `--output-dir` to commands that share a run. If the reports cannot find the full run, execute `run` first. For a Python version mismatch, use `uv sync --locked --python 3.12`. Re-run the fetch command to repair a file that fails the hash check.
+Pass the same `--output-dir` to commands that share a run. If uv selects a different Python version, run `uv sync --locked --python 3.12`.
 
 ## Experiment design
 
@@ -101,4 +101,4 @@ The renderer writes `BMSP_Report.pdf` for **1. report** and `BMSP_Code_Documenta
 
 ## Sources
 
-Data, method references and workflow attribution appear in [docs/SOURCES.md](docs/SOURCES.md). This educational experiment measures offline beat classification on one historical dataset.
+See [docs/SOURCES.md](docs/SOURCES.md) for the dataset, published methods and software references.

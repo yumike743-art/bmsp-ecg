@@ -26,10 +26,12 @@ The verifier recalculated the original tables and the record 213 and minority-cl
 
 The course report has nine pages. The code documentation has three. The report's first page uses the local identity and links to the public repository. All pages were rendered to check typography, figures, table bounds and page numbering.
 
-## Fixed submission version
+## Submission version 1
 
 `analyze` reconstructs the drift alignment from the saved event ledger. It pairs the detector branches by record ID and annotated sample, then counts status differences and sample changes among common matches. The result verifier recomputes that alignment with indexed records.
 
 `ablate` fits the two restricted forests with the original training index and uses the same held-out beats as the clean, reference-position, filtered result. The full-feature row uses the original predictions. The verifier recalculates the four reported measures from the saved ablation ledger. The supplementary runs were repeated with the separate clean checkout's baseline ledgers and independently downloaded data. The expanded comparison matched 28 result files byte-for-byte. All 10 unit tests passed.
 
-The submission PDFs are generated in a clean checkout at `submission-v1`. The ZIP is exported from that tag and records its full commit in `SOURCE_VERSION.json`. The PDFs record the tag and short commit. Keep `identity.yaml` with the local submission files.
+## Submission version 2
+
+The second submission tag updates the English text and documentation. It uses the same data, split, experiment configuration and saved results. The ZIP records the source tag and full commit in `SOURCE_VERSION.json`. The PDFs print the same tag and the short commit. Add the local `identity.yaml` when regenerating the submission PDFs.
