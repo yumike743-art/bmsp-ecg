@@ -18,9 +18,11 @@ The paired 95% intervals include zero in all nine conditions. On the original re
 
 ## Reproduce on CPU
 
-Use Linux or WSL with Python 3.12 and uv. Unpack the project archive or open the repository checkout, then run these commands from the project root. [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
+Use Linux or WSL with Python 3.12 and uv. Clone the public repository, then run the commands from its root. [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
 
 ```bash
+git clone https://github.com/yumike743-art/bmsp-ecg
+cd bmsp-ecg
 uv sync --locked
 uv run pytest -q
 uv run python -m bmsp_ecg data fetch --config configs/experiment.yaml

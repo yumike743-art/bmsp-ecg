@@ -17,3 +17,11 @@ Verified on 2026-11-24 with CPython 3.12.14, uv 0.13.9 and Linux x86-64. The run
 | Document revision | `uv run python -m bmsp_ecg report --config configs/experiment.yaml --identity identity.yaml` | 0 | The local PDF check confirmed ten searchable pages, the embedded native-name font, vector figures and page bounds. The main chart was also reviewed in grayscale. |
 
 The archive includes the original run's prediction ledgers, source tables and execution logs. The result comparison excludes elapsed time, RSS and PDF metadata because those are run-specific.
+
+## Final sensitivity analysis and drift replay
+
+The final clean checkout at `b5a7fce` passed `uv sync --locked`, `uv run pytest -q`, the versioned data fetch, `smoke`, `run`, `analyze`, `stress`, the result verifier, and PDF generation. The data fetch checked all 144 official hashes. The tests passed 10/10.
+
+The verifier recalculated the original tables and the record 213 and minority-class tables. It also checked 95,232 additional QRS events from the 0 dB replay, both branches' shared input hashes and the paired bootstrap interval. Comparison with the clean checkout matched 24 result files byte-for-byte. The archive includes the clean run, result verification, result comparison and PDF audit logs.
+
+The final course report has nine pages. The code documentation has three. The report's first page uses the local identity and links to the public repository. All pages were rendered to check typography, figures, table bounds and page numbering.
