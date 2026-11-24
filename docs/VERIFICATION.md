@@ -24,4 +24,12 @@ The final clean checkout at `b5a7fce` passed `uv sync --locked`, `uv run pytest 
 
 The verifier recalculated the original tables and the record 213 and minority-class tables. It also checked 95,232 additional QRS events from the 0 dB replay, both branches' shared input hashes and the paired bootstrap interval. Comparison with the clean checkout matched 24 result files byte-for-byte. The archive includes the clean run, result verification, result comparison and PDF audit logs.
 
-The final course report has nine pages. The code documentation has three. The report's first page uses the local identity and links to the public repository. All pages were rendered to check typography, figures, table bounds and page numbering.
+The course report has nine pages. The code documentation has three. The report's first page uses the local identity and links to the public repository. All pages were rendered to check typography, figures, table bounds and page numbering.
+
+## Fixed submission version
+
+`analyze` reconstructs the drift alignment from the saved event ledger. It pairs the detector branches by record ID and annotated sample, then counts status differences and sample changes among common matches. The result verifier recomputes that alignment with indexed records.
+
+`ablate` fits the two restricted forests with the original training index and uses the same held-out beats as the clean, reference-position, filtered result. The full-feature row uses the original predictions. The verifier recalculates the four reported measures from the saved ablation ledger. The supplementary runs were repeated with the separate clean checkout's baseline ledgers and independently downloaded data. The expanded comparison matched 28 result files byte-for-byte. All 10 unit tests passed.
+
+The submission PDFs are generated in a clean checkout at `submission-v1`. The ZIP is exported from that tag and records its full commit in `SOURCE_VERSION.json`. The PDFs record the tag and short commit. Keep `identity.yaml` with the local submission files.

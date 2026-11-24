@@ -2,6 +2,7 @@
 
 import json
 import re
+import subprocess
 from datetime import date
 from html import escape
 from pathlib import Path
@@ -11,6 +12,7 @@ import pandas as pd
 import yaml
 from scipy.signal import sosfreqz
 
+from .ablation import checked_ablation
 from .figures import build_figures
 from .layout import (COVER_LIGHT, INK, TEAL, CoverTrace, Spacer, VectorFigure,
                      build_pdf, code, heading, note, para, register_fonts, section, table)
@@ -76,8 +78,42 @@ def student_name(identity):
     )
 
 
+def source_version():
+    manifest = Path("SOURCE_VERSION.json")
+    if Path(".git").exists():
+        def git(*args):
+            return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout.strip()
+
+        commit = git("rev-parse", "HEAD")
+        tags = git("tag", "--points-at", "HEAD", "--list", "submission-v*", "--sort=-version:refname").splitlines()
+        dirty = bool(git("status", "--porcelain"))
+        return {"commit": commit, "tag": tags[0] if tags and not dirty else "", "dirty": dirty}
+    if manifest.is_file():
+        version = json.loads(manifest.read_text())
+        if not re.fullmatch(r"[0-9a-f]{40}", version.get("commit", "")) or not re.fullmatch(
+            r"submission-v[0-9]+", version.get("tag", "")
+        ):
+            raise ValueError(f"Invalid version manifest {manifest}")
+        return version
+    return {"commit": "", "tag": ""}
+
+
+def release_line(identity, version):
+    if not version["commit"]:
+        return []
+    repo, tag, commit = identity["repository"], version["tag"], version["commit"][:7]
+    version_text = f"Source commit {commit}"
+    if version.get("dirty"):
+        version_text += " with local changes"
+    if tag:
+        tag_label = link(f"{repo.rstrip('/')}/tree/{tag}", tag) if repo else escape(tag)
+        version_text = f"Submission version {tag_label} &nbsp;·&nbsp; {version_text}"
+    return [note(version_text)]
+
+
 def read_results(run):
     stress = checked_stress(run)
+    ablation = checked_ablation(run)
     return {
         "meta": json.loads((run / "run_metadata.json").read_text()),
         "case": json.loads((run / "failure_meta.json").read_text()),
@@ -94,11 +130,13 @@ def read_results(run):
         "sensitivity": pd.read_csv(run / "sensitivity_record_213.csv").set_index("scope"),
         "minority": pd.read_csv(run / "minority_errors.csv").set_index(["measure", "true", "outcome"]).sort_index(),
         "stress": (pd.read_csv(stress / "metrics.csv").set_index("branch"),
-                   pd.read_csv(stress / "paired_delta.csv").iloc[0]) if stress else None,
+                   pd.read_csv(stress / "paired_delta.csv").iloc[0],
+                   pd.read_csv(stress / "alignment.csv").iloc[0]) if stress else None,
+        "ablation": pd.read_csv(ablation / "metrics.csv").set_index("feature_set") if ablation else None,
     }
 
 
-def cover(identity, results, trace):
+def cover(identity, results, trace, version):
     n = results["meta"]
     scores = results["scores"]
     raw, filtered = (scores.loc[key].macro_f1 for key in ("reference_raw", "reference_filtered"))
@@ -123,7 +161,9 @@ def cover(identity, results, trace):
         para(f"Student ID {escape(identity['student_id'] or 'pending')} &nbsp;·&nbsp; "
              f"{escape(identity['date'] or date.today().isoformat())}", after=3),
         para("Huaqiao University &nbsp;·&nbsp; Instructor Dr. DUAN Fang", after=4),
-        para(f"Source code &nbsp; {link(repo) if repo else 'Public repository pending'}", after=23),
+        para(f"Source code &nbsp; {link(repo) if repo else 'Public repository pending'}", after=4),
+        *release_line(identity, version),
+        Spacer(1, 12),
         heading("Abstract"),
         para(f"Two random forests classified MLII beats from {number(n['test_subjects'])} held-out "
              f"MIT-BIH subjects. The noise comparison used reference beat positions. Without added noise, "
@@ -316,7 +356,7 @@ def detection_results(results):
 
 
 def stress_results(results):
-    metrics, delta = results["stress"]
+    metrics, delta, alignment = results["stress"]
     drift = results["noise"].query("noise == 'drift' and snr_db == '0'").iloc[0]
     raw, filtered = (metrics.loc[branch] for branch in ("raw", "filtered"))
     same_qrs = raw[["matched", "missed", "extra"]].equals(filtered[["matched", "missed", "extra"]])
@@ -324,6 +364,11 @@ def stress_results(results):
                       f"{number(raw.missed)} and added {number(raw.extra)} detections."
                       if same_qrs else
                       f"QRS F1 was {f1(raw.qrs_f1)} without and {f1(filtered.qrs_f1)} with the external band-pass.")
+    status_note = (
+        f"match or miss status agreed for all {number(alignment.references)} references."
+        if not alignment.status_disagreements else
+        f"match or miss status differed for {number(alignment.status_disagreements)} reference beats."
+    )
     return [
         section("XQRS with 0 dB baseline drift"),
         para("This replay adds 0.33 Hz baseline drift at 0 dB to the same held-out recordings. Each "
@@ -339,15 +384,46 @@ def stress_results(results):
         ], [.33, .12, .23, .16, .16], numeric=range(1, 5)),
         Spacer(1, 8),
         note(f"Table 6. Additional experiment on {number(raw.support)} four-class reference beats. "
-             "Both detector branches still use XQRS's internal preprocessing."),
-        heading("Does the estimated gain persist?"),
+             "The QRS tally also includes reference beats outside the four classes. Both branches "
+             "use XQRS's internal preprocessing."),
+        heading("Matched beats and classification"),
+        para(detection_note + f" After alignment by record and reference sample, {status_note} "
+             f"Among {number(alignment.common_matches)} common matches, "
+             f"{number(alignment.position_changes)} ({pct(alignment.position_change_rate)}) shifted to a "
+             f"different detected sample. At identical detected samples, {number(alignment.same_position_prediction_changes)} "
+             "class predictions differed. The waveforms and fitted forests differ between branches, and "
+             "RR features can still depend on a shifted neighboring detection."),
         para(f"At reference positions, the 0 dB drift estimate was {signed(drift.delta)} macro-F1 "
              f"(95% paired interval {ci(drift)}). With XQRS and with detection errors counted, the "
-             f"estimate was {signed(delta.delta)} ({ci(delta)}). The positive point estimate persisted "
-             "after automatic localization. Both intervals included zero."),
-        para(detection_note + " This comparison covers a sinusoidal drift at one noise level."),
+             f"gain was {signed(delta.delta)} (95% paired interval {ci(delta)}), with macro-F1 "
+             f"moving from {f1(raw.macro_f1)} to {f1(filtered.macro_f1)}. Both intervals included zero. "
+             "This end-to-end comparison combines shifts in detector positions with changes in class prediction."),
         note(f"The paired interval uses {number(delta.bootstrap_repetitions)} bootstrap resamples of "
              f"the {number(delta.subjects)} held-out subjects."),
+    ]
+
+
+def ablation_section(metrics, table_number):
+    labels = {"rr": "RR only", "waveform": "Waveform only", "all": "RR and waveform"}
+    waveform, full = (metrics.loc[key] for key in ("waveform", "all"))
+    recall_change = 100 * (full.s_recall - waveform.s_recall)
+    recall_leader = labels[metrics.s_recall.idxmax()]
+    f1_leader = labels[metrics.macro_f1.idxmax()]
+    return [
+        heading("Exploratory feature ablation"),
+        table(["Features", "Count", "Macro-F1", "S precision", "S recall", "S → N"], [
+            [labels[key], number(row.features), f1(row.macro_f1), pct(row.s_precision),
+             pct(row.s_recall), number(row.s_to_n)]
+            for key, row in metrics.iterrows()
+        ], [.29, .10, .16, .16, .145, .145], numeric=range(1, 6)),
+        Spacer(1, 8),
+        note(f"Table {table_number}. Reference positions without added noise, with the external band-pass. "
+             "Both restricted forests use the original subject split, training configuration and seed. "
+             "The all-feature row uses the original predictions."),
+        para(f"Adding RR features to the waveform features changed S recall by {recall_change:+.2f} "
+             f"percentage points and macro-F1 by {signed(full.macro_f1 - waveform.macro_f1)}. "
+             f"The S-to-N count went from {number(waveform.s_to_n)} to {number(full.s_to_n)}. "
+             f"{recall_leader} gave the highest S recall. {f1_leader} gave the highest macro-F1."),
     ]
 
 
@@ -358,6 +434,7 @@ def classification_discussion(results, first_table):
     full, reduced = (results["sensitivity"].loc[scope] for scope in ("all", "without_213"))
     minority = results["minority"].loc["reference_filtered_classification", "S"]
     correct, as_n = (minority.loc[label] for label in ("S", "N"))
+    ablation = results["ablation"]
     return [
         section("Discussion"),
         heading("Post hoc sensitivity to record 213"),
@@ -383,8 +460,8 @@ def classification_discussion(results, first_table):
              "Rows are annotated classes and columns are predictions."),
         para(f"Of the {number(correct.support)} S beats, the classifier labeled {number(correct['count'])} "
              f"as S and {number(as_n['count'])} as N. The S-to-N error is the main classification problem "
-             "for S in this test set. A supraventricular ectopic beat can resemble N in QRS shape [3], "
-             "so the next feature comparison should test what helps distinguish S from N."),
+             "for S in this test set. A supraventricular ectopic beat can resemble N in QRS shape [3]."),
+        *(ablation_section(ablation, first_table + 2) if ablation is not None else []),
     ]
 
 
@@ -485,11 +562,13 @@ def conclusion(results):
     ]
 
 
-def guide_pages(identity, results):
+def guide_pages(identity, results, version):
     n = results["meta"]
     repo = identity["repository"]
     deps = n["dependencies"]
     name = student_name(identity)
+    tag = version["tag"]
+    clone = f"git clone --branch {escape(tag)} {escape(repo)}" if tag else f"git clone {escape(repo)}"
     owner_line = [
         note(f"{name} &nbsp;·&nbsp; Student ID {escape(identity['student_id'])} "
              f"&nbsp;·&nbsp; {escape(identity['date'])}")
@@ -499,6 +578,7 @@ def guide_pages(identity, results):
             section("Code documentation"),
             para("MIT-BIH beat classification and report generation", size=11, leading=16, after=5),
             *owner_line,
+            *release_line(identity, version),
             heading("Environment"),
             para(f"Use Linux or WSL with Python 3.12 and uv. The reference run used Linux x86-64, "
                  f"CPython {n['python']} and two CPU workers. <font name='Mono'>uv.lock</font> pins "
@@ -514,23 +594,23 @@ def guide_pages(identity, results):
             heading("Run the experiment"),
             para(f"Clone the public repository and run the commands below. {link(repo)}" if repo else
                  "Run the commands from the project root."),
-            code((["git clone " + escape(repo), "cd " + escape(repo.rstrip("/").rsplit("/", 1)[-1])] if repo else []) + [
+            code(([clone, "cd " + escape(repo.rstrip("/").rsplit("/", 1)[-1])] if repo else []) + [
                 "uv sync --locked",
                 "uv run pytest -q",
                 "uv run python -m bmsp_ecg data fetch --config configs/experiment.yaml",
                 "uv run python -m bmsp_ecg smoke --config configs/experiment.yaml",
                 "uv run python -m bmsp_ecg run --config configs/experiment.yaml",
                 "uv run python -m bmsp_ecg stress --config configs/experiment.yaml",
+                "uv run python -m bmsp_ecg ablate --config configs/experiment.yaml",
                 "uv run python scripts/verify_results.py outputs/run",
-                "uv run python -m bmsp_ecg report --config configs/experiment.yaml --draft",
             ]),
-            Spacer(1, 12),
-            para("The fetch command downloads the WFDB <font name='Mono'>.dat</font>, "
-                 "<font name='Mono'>.hea</font> and <font name='Mono'>.atr</font> files. It checks each "
-                 "against the published SHA-256 list and reuses files that already match. MIT-BIH is available "
-                 f"under the Open Data Commons Attribution License v1.0. {link('https://physionet.org/content/mitdb/1.0.0/', 'PhysioNet dataset')}."),
-            note("Smoke writes to outputs/smoke/. The full experiment writes to outputs/run/. "
-                 "Stress reuses the saved models and writes to outputs/run/stress/. Both PDFs go to submission/."),
+            heading("Generate preview PDFs"),
+            code(["uv run python -m bmsp_ecg report --config configs/experiment.yaml --draft"]),
+            heading("Generate submission PDFs"),
+            code(["uv run python -m bmsp_ecg report --config configs/experiment.yaml --identity identity.yaml"]),
+            Spacer(1, 8),
+            note("Both PDF commands write to submission/. Create your local identity.yaml as described "
+                 "on page 3 before generating the submission PDFs."),
         ],
         [
             section("Inputs and outputs"),
@@ -550,7 +630,8 @@ def guide_pages(identity, results):
                  "and paired bootstrap intervals for filtering and detection."],
                 ["outputs/run/sensitivity_record_213.csv, minority_errors.csv",
                  "Post hoc clean reference-position comparison and minority-class counts."],
-                ["outputs/run/stress/", "0 dB drift detector ledger, paired waveform audit and metrics."],
+                ["outputs/run/stress/", "0 dB drift detections, paired waveform audit and alignment metrics."],
+                ["outputs/run/ablation/", "Restricted-forest and original predictions with feature-set metrics."],
                 ["outputs/run/detection_by_record.csv", "Detection totals, offsets, extra detections and misses "
                  "for each record and pooled across test records."],
                 ["outputs/run/*_waveform.csv, figures/", "Source samples, event tables, case metadata and "
@@ -565,15 +646,17 @@ def guide_pages(identity, results):
                  f"It wrote {number(n['prediction_rows'])} reference-position predictions and "
                  f"{number(n['detection_rows'])} detection-ledger rows."),
             note("Timing covers the experiment after the data check. RSS is the Linux process high-water mark."),
+            note("The fetch command checks the WFDB files against the published SHA-256 list. MIT-BIH "
+                 "is available under the Open Data Commons Attribution License v1.0. "
+                 f"{link('https://physionet.org/content/mitdb/1.0.0/', 'PhysioNet dataset')}."),
         ],
         [
             section("Verification and submission"),
             heading("Verify the evaluation ledger"),
             para("The verifier recalculates the main results, the record 213 sensitivity table, the "
-                 "minority-class counts and the drift replay metrics from saved predictions and matches."),
+                 "minority-class counts, drift alignment and feature ablation from saved predictions and matches."),
             code(["uv run python scripts/verify_results.py outputs/run"]),
-            para("To rebuild the two post hoc tables from a saved full run, use the analyze command. "
-                 "It reads prediction files only."),
+            para("The analyze command rebuilds the post hoc tables and drift alignment from saved ledgers."),
             code(["uv run python -m bmsp_ecg analyze --config configs/experiment.yaml"]),
             Spacer(1, 12),
             heading("Build PDFs with local cover details"),
@@ -582,8 +665,6 @@ def guide_pages(identity, results):
                  "<font name='Mono'>date</font> (YYYY-MM-DD), and <font name='Mono'>repository</font> "
                  "(public GitHub URL). Use <font name='Mono'>name_native</font> for a second spelling if "
                  "needed. Git ignores the identity file and the submission directory."),
-            code(["uv run python -m bmsp_ecg report --config configs/experiment.yaml \u005c",
-                  "&nbsp;&nbsp;--identity identity.yaml"]),
             Spacer(1, 8),
             table(["PDF", "Rain Classroom field"],
                   [[REPORT, "1. report (50 points)"], [GUIDE, "2. Code (50 points)"]], [.58, .42]),
@@ -602,6 +683,7 @@ def guide_pages(identity, results):
 
 def build_reports(cfg, run, target, identity_path, draft):
     identity = load_identity(identity_path, draft)
+    version = source_version()
     results = read_results(run)
     if results["meta"]["scope"] != "run":
         raise ValueError("The report requires full experiment results. Execute run first.")
@@ -622,7 +704,7 @@ def build_reports(cfg, run, target, identity_path, draft):
     qc_meta = json.loads((run / "qc_meta.json").read_text())
     trace = CoverTrace(qc.time_s.to_numpy(), qc.raw_mV.to_numpy(), qc_meta["record_id"])
     pages = [
-        cover(identity, results, trace), acquisition(results, figure), methodology(saved_config),
+        cover(identity, results, trace, version), acquisition(results, figure), methodology(saved_config),
         noise_results(results, figure), detection_results(results),
     ]
     if results["stress"]:
@@ -630,11 +712,11 @@ def build_reports(cfg, run, target, identity_path, draft):
     first_table = 7 if results["stress"] else 6
     pages.extend([
         classification_discussion(results, first_table),
-        detection_discussion(results, figure, first_table + 2),
+        detection_discussion(results, figure, first_table + 2 + (results["ablation"] is not None)),
         conclusion(results),
     ])
     build_pdf(target / REPORT, pages, TITLE + " " + SUBTITLE, "Course project report",
               identity["name"], draft, placements, cover_band=True)
-    build_pdf(target / GUIDE, guide_pages(identity, results), "BMSP Code Documentation",
+    build_pdf(target / GUIDE, guide_pages(identity, results, version), "BMSP Code Documentation",
               "Code documentation", identity["name"], draft, [])
     print(f"Wrote {target / REPORT} and {target / GUIDE}")

@@ -18,10 +18,10 @@ The paired 95% intervals include zero in all nine conditions. On the original re
 
 ## Reproduce on CPU
 
-Use Linux or WSL with Python 3.12 and uv. Clone the public repository, then run the commands from its root. [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
+Use Linux or WSL with Python 3.12 and uv. Clone the fixed submission tag, then run the commands from the project root. [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
 
 ```bash
-git clone https://github.com/yumike743-art/bmsp-ecg
+git clone --branch submission-v1 https://github.com/yumike743-art/bmsp-ecg
 cd bmsp-ecg
 uv sync --locked
 uv run pytest -q
@@ -29,19 +29,21 @@ uv run python -m bmsp_ecg data fetch --config configs/experiment.yaml
 uv run python -m bmsp_ecg smoke --config configs/experiment.yaml
 uv run python -m bmsp_ecg run --config configs/experiment.yaml
 uv run python -m bmsp_ecg stress --config configs/experiment.yaml
+uv run python -m bmsp_ecg ablate --config configs/experiment.yaml
 uv run python scripts/verify_results.py outputs/run
-uv run python -m bmsp_ecg report --config configs/experiment.yaml --draft
 ```
 
 The data command downloads the versioned WFDB header, signal and reference files over HTTPS and compares them to the official SHA-256 list. Valid existing files are reused. With an existing copy, append `--data-dir /path/to/mitdb` to the data, smoke and run commands. `data check` confirms triplets exist and checks the official digests when `SHA256SUMS.txt` is present.
 
 The smoke run uses six real recordings and 12 trees per branch. The complete run uses 300 trees per branch. The measured full experiment was 180.5 s with peak process RSS of 812 MiB on Linux x86-64, CPython 3.12.14 and two CPU workers. It excludes dependency setup, source data checks and PDF rendering. See [verification notes](docs/VERIFICATION.md).
 
-The stress command reuses the two models from `run`. It injects the same 0 dB drift into the same test cohort, then runs XQRS separately for each branch. The command below rebuilds the sensitivity and minority-error tables from the two saved ledgers and the saved run configuration.
+The stress command reuses the two models from `run`. It injects the same 0 dB drift into the same test cohort, then runs XQRS separately for each branch. It aligns the branches by record and annotated beat sample to compare match status and detected positions. The command below rebuilds the post hoc sensitivity, minority-error and drift alignment tables from saved ledgers.
 
 ```bash
 uv run python -m bmsp_ecg analyze --config configs/experiment.yaml
 ```
+
+The exploratory ablation command fits RR-only and waveform-only forests to the original filtered training beats. It uses the same forest configuration and seed and evaluates the held-out reference beats without added noise. The full-feature row uses the original saved predictions.
 
 Pass the same `--output-dir` to commands that share a run. If the reports cannot find the full run, execute `run` first. For a Python version mismatch, use `uv sync --locked --python 3.12`. Re-run the fetch command to repair a file that fails the hash check.
 
@@ -65,13 +67,21 @@ The detector call uses `xqrs_detect(sig=filtered, fs=360, conf=None, learn=True,
 | `sensitivity_record_213.csv`, `minority_errors.csv` | Post hoc sensitivity and classification/detection error counts |
 | `stress/events.csv.gz`, `stress/metrics.csv`, `stress/paired_delta.csv` | Drift replay QRS and classification results |
 | `stress/noise_audit.csv`, `stress/provenance.json` | Shared waveform hashes, SNR and source run/model hashes |
+| `stress/alignment.csv` | Paired QRS match status, changes to detected sample positions and class prediction changes at identical positions |
+| `ablation/metrics.csv`, `ablation/predictions.csv.gz`, `ablation/provenance.json` | Feature ablation scores, prediction ledger and source hashes |
 | `detection_by_record.csv`, `detection_window_skips.csv` | Per-record QRS metrics and clipped edge counts |
 | `qc_*`, `failure_*`, `figures/` | ECG figure source data and generated vector/PNG graphics |
 | `run_metadata.json`, `*_model.joblib` | Timing, memory, environment and fitted pipelines |
 
-Smoke writes to `outputs/smoke/`, the complete run to `outputs/run/`, the stress replay to `outputs/run/stress/` and the documents to `submission/`. Load Joblib models only from a trusted run.
+Smoke writes to `outputs/smoke/`, the full run to `outputs/run/`, the stress replay to `outputs/run/stress/`, and ablation to `outputs/run/ablation/`. Both PDF commands write to `submission/`. Load Joblib models only from a trusted run.
 
-## Build the final PDFs
+## Generate preview PDFs
+
+```bash
+uv run python -m bmsp_ecg report --config configs/experiment.yaml --draft
+```
+
+## Generate submission PDFs
 
 Save the cover fields in a local `identity.yaml`. Use the optional `name_native` field for a second spelling.
 
@@ -80,14 +90,14 @@ name: "Your name as it should appear on the cover"
 name_native: "Optional second spelling"
 student_id: "Your student ID"
 date: "YYYY-MM-DD"
-repository: "https://github.com/OWNER/REPOSITORY"
+repository: "https://github.com/yumike743-art/bmsp-ecg"
 ```
 
 ```bash
 uv run python -m bmsp_ecg report --config configs/experiment.yaml --identity identity.yaml
 ```
 
-The renderer writes `BMSP_Report.pdf` for **1. report** and `BMSP_Code_Documentation.pdf` for **2. Code**. The submission directory and local identity file are ignored by Git.
+The renderer writes `BMSP_Report.pdf` for **1. report** and `BMSP_Code_Documentation.pdf` for **2. Code**. The submission directory and local identity file are ignored by Git. Both documents record the source tag and short commit from a clean tagged checkout. The project ZIP stores the same version in `SOURCE_VERSION.json`.
 
 ## Sources
 

@@ -40,6 +40,11 @@ def references(record, cfg):
     return Reference(record.samples[is_beat], labels[is_beat], record.symbols[is_beat])
 
 
+def make_forest(hyperparameters):
+    return make_pipeline(SimpleImputer(strategy="median", keep_empty_features=True),
+                         RandomForestClassifier(**hyperparameters))
+
+
 def classification_frame(record, ref, rows, labels, noise, snr, branch):
     return pd.DataFrame(dict(
         record_id=record.split.record_id, subject_group=record.split.subject_group,
@@ -190,8 +195,7 @@ def _run(cfg, root, rows, checksums, target, scope, started):
         hyperparameters = dict(cfg["forest"])
         if scope == "smoke":
             hyperparameters["n_estimators"] = 12
-        model = make_pipeline(SimpleImputer(strategy="median", keep_empty_features=True),
-                              RandomForestClassifier(**hyperparameters))
+        model = make_forest(hyperparameters)
         model.fit(np.concatenate(matrices), index.true)
         if tuple(sorted(model.classes_)) != tuple(sorted(CLASSES)):
             raise ValueError(f"Training partition lacks a required class: {model.classes_}")

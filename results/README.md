@@ -10,3 +10,5 @@ These files are the small tables and representative figures from the completed a
 - `sensitivity_record_213.csv` gives the full primary and post hoc reduced-cohort metrics at reference positions without added noise.
 - `minority_errors.csv` gives S classification at reference positions separately from N and V misses in the detector experiment without added noise.
 - `stress_metrics.csv` and `stress_paired_delta.csv` give the additional 0 dB drift XQRS results. The recorded waveform receives the same drift in both branches. The end-to-end recall denominators include missed beats.
+- `stress_alignment.csv` compares the two detector branches beat by beat using the record ID and reference sample. Unmatched detections still count as false positives in the detector scores.
+- `feature_ablation.csv` compares RR-only, waveform-only and full features without added noise, with reference positions and the external band-pass. The full-feature predictions come from the primary run.

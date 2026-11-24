@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import yaml
 from sklearn.metrics import confusion_matrix, f1_score, precision_recall_fscore_support
+from bmsp_ecg.ablation import checked_ablation
+from bmsp_ecg.signal import FEATURE_NAMES, MORPH_NAMES, RR_NAMES
 from bmsp_ecg.stress import checked_stress
 
 CLASSES = ["N", "S", "V", "F"]
@@ -145,7 +147,54 @@ def check_stress(root, events, tolerance, snr, draws, groups):
     delta = read(folder, "paired_delta.csv").iloc[0]
     assert np.isclose(delta.delta, scores["filtered"] - scores["raw"], rtol=0, atol=1e-9)
     check_interval(scored["raw"], scored["filtered"], delta, draws, groups)
+    # Check per-reference agreement independently of the production merge.
+    raw, filtered = (
+        block.dropna(subset=["ref_sample"]).set_index(["record_id", "ref_sample"], verify_integrity=True).sort_index()
+        for _, block in ledger.groupby("branch", sort=False)
+    )
+    assert raw.index.equals(filtered.index)
+    both = raw.status.eq("matched") & filtered.status.eq("matched")
+    changed = raw.det_sample.ne(filtered.det_sample)
+    aligned = read(folder, "alignment.csv").iloc[0]
+    assert aligned.references == len(raw)
+    assert aligned.status_disagreements == raw.status.ne(filtered.status).sum()
+    assert aligned.common_matches == both.sum()
+    assert aligned.position_changes == (both & changed).sum()
+    assert aligned.same_position_prediction_changes == (both & ~changed & raw.pred.ne(filtered.pred)).sum()
+    np.testing.assert_allclose(aligned.position_change_rate, aligned.position_changes / aligned.common_matches,
+                               rtol=0, atol=1e-9)
+    print(f"Verified alignment of {len(raw):,} reference beats, including {int(aligned.position_changes):,} position changes.")
     print(f"Verified {len(ledger):,} additional detection rows and the 0 dB drift results.")
+
+
+def check_ablation(root, reference, config):
+    folder = checked_ablation(root)
+    if folder is None:
+        return
+    provenance = json.loads((folder / "provenance.json").read_text())
+    assert (provenance["noise"], provenance["positions"], provenance["branch"]) == ("clean", "reference", "filtered")
+    assert provenance["forest"] == config["forest"]
+    groups = {"rr": RR_NAMES, "waveform": MORPH_NAMES, "all": FEATURE_NAMES}
+    assert provenance["feature_sets"] == {name: list(features) for name, features in groups.items()}
+    events = read(folder, "predictions.csv.gz", dtype=INT_DTYPE)
+    metrics = read(folder, "metrics.csv").set_index("feature_set")
+    assert set(metrics.index) == set(events.feature_set) == set(groups)
+    key = ["record_id", "subject_group", "sample", "true"]
+    expected = reference[key + ["pred"]].reset_index(drop=True)
+    for name, features in groups.items():
+        actual = events.loc[events.feature_set == name, key + ["pred"]].reset_index(drop=True)
+        pd.testing.assert_frame_equal(actual[key], expected[key])
+        if name == "all":
+            pd.testing.assert_frame_equal(actual, expected)
+        row = metrics.loc[name]
+        assert (row.features, row.beats) == (len(features), len(actual))
+        assert row.s_to_n == (actual["true"].eq("S") & actual.pred.eq("N")).sum()
+        precision, recall, scores, _ = precision_recall_fscore_support(
+            actual["true"], actual.pred, labels=CLASSES, zero_division=0,
+        )
+        np.testing.assert_allclose([row.macro_f1, row.s_precision, row.s_recall],
+                                   [scores.mean(), precision[1], recall[1]], rtol=0, atol=1e-9)
+    print(f"Verified feature ablation on {len(expected):,} identical held-out beats.")
 
 
 def validate(root):
@@ -252,6 +301,7 @@ def validate(root):
     assert case["start"] < case["focus_sample"] < case["stop"]
     check_posthoc(root, computed, events)
     check_stress(root, events, tolerance, snr, draws, groups)
+    check_ablation(root, computed["filtered"], config)
     print(f"Verified {len(training):,} training indices, {len(predictions):,} classifications, "
           f"{len(events):,} detection rows, {len(noise)} paired noise settings and all metrics.")
     return summary
@@ -266,7 +316,10 @@ def compare(first, second):
         "sensitivity_record_213.csv", "minority_errors.csv",
     ]
     if (first / "stress").is_dir() or (second / "stress").is_dir():
-        names += ["stress/events.csv.gz", "stress/noise_audit.csv", "stress/metrics.csv", "stress/paired_delta.csv"]
+        names += ["stress/events.csv.gz", "stress/noise_audit.csv", "stress/metrics.csv",
+                  "stress/paired_delta.csv", "stress/alignment.csv"]
+    if (first / "ablation").is_dir() or (second / "ablation").is_dir():
+        names += ["ablation/metrics.csv", "ablation/predictions.csv.gz", "ablation/provenance.json"]
     for name in names:
         assert (first / name).read_bytes() == (second / name).read_bytes(), name
     print(f"Replayed {len(names)} files byte-for-byte, including beat indices and per-beat predictions.")

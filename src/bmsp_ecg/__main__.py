@@ -17,11 +17,12 @@ def main(argv=None):
     run = sub.add_parser("run", help="Run the complete pre-specified experiment")
     analyze = sub.add_parser("analyze", help="Recompute post-hoc tables from saved predictions")
     stress = sub.add_parser("stress", help="Run the 0 dB drift detector comparison with saved models")
+    ablate = sub.add_parser("ablate", help="Fit exploratory RR-only and waveform-only forests")
     report = sub.add_parser("report", help="Rebuild figures and two PDF documents")
     report.add_argument("--identity", type=Path, help="Local YAML with name, student_id, date and repository")
     report.add_argument("--submission-dir", type=Path, default=Path("submission"))
     report.add_argument("--draft", action="store_true")
-    for command in (data, smoke, run, analyze, stress, report):
+    for command in (data, smoke, run, analyze, stress, ablate, report):
         command.add_argument("--config", type=Path, default=Path("configs/experiment.yaml"))
         command.add_argument("--data-dir", type=Path)
         command.add_argument("--output-dir", type=Path)
@@ -51,6 +52,11 @@ def main(argv=None):
 
             checksums = check_directory(root, rows, dataset["version"])
             run_drift_stress(cfg, root, rows, checksums, output / "run")
+        elif args.command == "ablate":
+            from .ablation import run_ablation
+
+            checksums = check_directory(root, rows, dataset["version"])
+            run_ablation(cfg, root, rows, checksums, output / "run")
         else:
             from .report import build_reports
 

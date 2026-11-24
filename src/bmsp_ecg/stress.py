@@ -37,6 +37,10 @@ def rebuild_posthoc(cfg, run):
         write_posthoc(preds, events, staged)
         for file in staged.iterdir():
             file.replace(run / file.name)
+        stress = checked_stress(run)
+        if stress is not None:
+            write_alignment(pd.read_csv(stress / "events.csv.gz", dtype={"record_id": str}), staged)
+            (staged / "alignment.csv").replace(stress / "alignment.csv")
     print(f"Recomputed sensitivity and minority-error tables in {run}; no training.", flush=True)
 
 
@@ -52,6 +56,26 @@ def checked_stress(run):
         if (run / name).is_file() and sha256(run / name) != metadata["model_sha256"][name]:
             raise ValueError(f"Stale drift results for {name}; repeat the stress command.")
     return folder
+
+
+def write_alignment(events, target):
+    key = ["record_id", "ref_sample"]
+    fields = key + ["status", "det_sample", "pred"]
+    ref = events.dropna(subset=["ref_sample"])
+    raw, filtered = (ref.loc[ref.branch == branch, fields] for branch in BRANCHES)
+    paired = raw.merge(filtered, on=key, how="outer", validate="one_to_one",
+                       indicator=True, suffixes=("_raw", "_filtered"))
+    if not paired["_merge"].eq("both").all():
+        raise ValueError("Drift branches contain different reference beats.")
+    matched = paired.loc[paired.status_raw.eq("matched") & paired.status_filtered.eq("matched")]
+    moved = matched.det_sample_raw.ne(matched.det_sample_filtered)
+    row = dict(
+        references=len(paired), status_disagreements=int(paired.status_raw.ne(paired.status_filtered).sum()),
+        common_matches=len(matched), position_changes=int(moved.sum()),
+        position_change_rate=float(ratio(moved.sum(), len(matched))),
+        same_position_prediction_changes=int((~moved & matched.pred_raw.ne(matched.pred_filtered)).sum()),
+    )
+    pd.DataFrame([row]).to_csv(target / "alignment.csv", index=False, float_format="%.10f")
 
 
 def summarize_stress(events, cfg, staged):
@@ -75,6 +99,7 @@ def summarize_stress(events, cfg, staged):
         cfg["bootstrap"]["repetitions"], cfg["bootstrap"]["seed"],
     )
     pd.DataFrame([bootstrap]).to_csv(staged / "paired_delta.csv", index=False, float_format="%.10f")
+    write_alignment(events, staged)
 
 
 def run_drift_stress(cfg, data_root, split, checksums, run):
