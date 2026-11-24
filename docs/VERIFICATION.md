@@ -14,5 +14,6 @@ Verified on 2026-11-24 with CPython 3.12.14, uv 0.13.9 and Linux x86-64. The run
 | 5–6 · Reports | `uv run python -m bmsp_ecg report --config configs/experiment.yaml --draft` | 0 | 7-page course report and 3-page code guide, with searchable text and vector result figures. All pages were rendered for visual review. |
 | 7 · Clean replay | Copy source and lock into a fresh directory, then run locked install, tests, data check, smoke, full run and draft report | 0 | Full replay finished in 195.6 s. The fresh environment used an independently downloaded, checksum-verified dataset. |
 | 7 · Compare independent runs | `uv run python scripts/verify_results.py outputs/run --compare /path/to/replay/outputs/run` | 0 | 18 files matched byte-for-byte, including training indices, both prediction ledgers, all public metric tables and the two waveform data extracts. |
+| Document revision | `uv run python -m bmsp_ecg report --config configs/experiment.yaml --identity identity.yaml` | 0 | The local PDF check confirmed ten searchable pages, the embedded native-name font, vector figures and page bounds. The main chart was also reviewed in grayscale. |
 
 The archive includes the original run's prediction ledgers, source tables and execution logs. The result comparison excludes elapsed time, RSS and PDF metadata because those are run-specific.

@@ -12,11 +12,11 @@ import numpy as np
 import pandas as pd
 import yaml
 
-BLUE = "#176B87"
-ORANGE = "#A14922"
-INK = "#152C3D"
-GREY = "#526573"
-GRID = "#D9E3E9"
+TEAL = "#126659"
+ORANGE = "#9B4D28"
+INK = "#152C3A"
+GREY = "#526770"
+GRID = "#DBE4E1"
 STYLE = {
     "font.family": "DejaVu Sans", "font.size": 8.3, "axes.labelsize": 8.3,
     "axes.titlesize": 9.2, "text.color": INK, "axes.labelcolor": INK,
@@ -51,10 +51,13 @@ def robustness(run, folder):
         )], ignore_index=True)
         x = np.arange(len(subset))
         top, bottom = axs[:, j]
-        top.plot(x, subset.raw_f1, color=ORANGE, marker="s", mfc="white", ls="--", lw=1.35, ms=4.5,
-                 label="Raw waveform")
-        top.plot(x, subset.filtered_f1, color=BLUE, marker="o", lw=1.65, ms=4.6,
-                 label="External band-pass")
+        styles = [
+            (subset.raw_f1, "Raw waveform", dict(color=ORANGE, marker="s", mfc="white", lw=1.35, ms=4.5, ls="--")),
+            (subset.filtered_f1, "External band-pass", dict(color=TEAL, marker="o", lw=1.65, ms=4.6, ls="-")),
+        ]
+        for values, label, style in styles:
+            top.plot(x[1:], values.iloc[1:], label=label, **style)
+            top.plot(x[:1], values.iloc[:1], **style)
         top.set_title(title, loc="left", pad=8)
         top.set_ylim(lo, hi)
         bottom.axhline(0, color=GREY, lw=.8, ls=":")
@@ -69,6 +72,7 @@ def robustness(run, folder):
         bottom.set_xlabel("Injected SNR (dB)", labelpad=3.5)
         for ax in (top, bottom):
             ax.yaxis.grid(True, color=GRID, lw=.65, zorder=0)
+            ax.axvline(.5, color=GRID, lw=.8, ls=":")
             ax.set_xlim(-.29, len(x) - .71)
             ax.tick_params(axis="both", length=2.5, color=GRID)
     axs[0, 0].set_ylabel("Macro-F1")
@@ -93,7 +97,7 @@ def waveform(run, folder, name):
     low, high = limits.min(), limits.max()
     room = max(.1, .18 * (high - low))
     for ax, label, title, color in zip(axs, ["raw_mV", "filtered_mV"],
-                                      ["A  Raw MLII", "B  Band-passed MLII"], [ORANGE, BLUE]):
+                                      ["A  Raw MLII", "B  Band-passed MLII"], [ORANGE, TEAL]):
         ax.yaxis.grid(True, color=GRID, lw=.6, zorder=0)
         if is_failure:
             ax.axvspan(focus - tolerance, focus + tolerance, color="#ECE0CA", alpha=.83, lw=0)
@@ -108,12 +112,15 @@ def waveform(run, folder, name):
         labels = refs[refs.label.isin(["N", "S", "V", "F"])]
         for ref in labels.itertuples(index=False):
             x = ref.sample / fs
-            axs[0].text(x, high + room * .74, ref.label, ha="center", va="center", fontsize=7.5)
+            missed = ref.sample == meta["focus_sample"] and meta["focus_status"] == "miss"
+            axs[0].text(x, high + room * .74, f"{ref.label} missed" if missed else ref.label,
+                        ha="center", va="center", fontsize=7.5,
+                        fontweight="bold" if missed else "normal")
         detections = events.dropna(subset=["det_sample"])
         indices = detections.det_sample.to_numpy(dtype=int) - meta["start"]
         within = (indices >= 0) & (indices < len(wave))
         axs[1].scatter(detections.det_sample[within] / fs, wave.filtered_mV.iloc[indices[within]],
-                       marker="v", s=27, c=BLUE, edgecolors="white", linewidths=.55, zorder=4)
+                       marker="v", s=27, c=TEAL, edgecolors="white", linewidths=.55, zorder=4)
     axs[1].set_xlabel("Time from record start (s)", labelpad=4)
     fig.supylabel("Amplitude (mV)", x=.025, fontsize=8.3)
     save(fig, folder, f"fig_{name}")

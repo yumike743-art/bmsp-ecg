@@ -9,5 +9,6 @@
 - Moody, Muldrow and Mark. MIT-BIH Noise Stress Test Database, PhysioNet. It describes recorded classes of ECG artifacts discussed as a follow-up to the synthetic noise experiment. [Dataset](https://physionet.org/content/nstdb/1.0.0/)
 - Kassis, Agarwal, He, Patel and Brueckner. Scientific Agent Skills, arXiv, 2026. The scientific visualization skill informed figure design and export review. [DOI](https://doi.org/10.48550/arXiv.2609.00065)
 - Workflow assistance used Codex, Vercel find-skills, Anthropic PDF, and verification-before-completion. [Find skills](https://skills.sh/vercel-labs/skills/find-skills) · [PDF](https://skills.sh/anthropics/skills/pdf) · [Verification](https://skills.sh/obra/superpowers/verification-before-completion)
+- The English revision used humanizer for sentence-level edits and scientific-writing to check evidence, uncertainty and disclosure. [Humanizer](https://skills.sh/blader/humanizer/humanizer) · [Scientific writing](https://skills.sh/k-dense-ai/scientific-agent-skills/scientific-writing)
 
 The study implementation is original for this project. External package algorithms are used through their documented APIs. The published summary tables derive from the PhysioNet data cited above.

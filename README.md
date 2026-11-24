@@ -1,6 +1,6 @@
 # How Much Does Filtering Help?
 
-Noise-robust ECG beat classification on unseen subjects, evaluated on the MIT-BIH Arrhythmia Database v1.0.0. The pipeline reads physical single-lead MLII, compares raw and externally filtered random forests, and evaluates how XQRS detections affect the filtered classifier.
+This project tests whether a 0.5–40 Hz band-pass helps classify MIT-BIH heartbeats from people absent from training. Two random forests use the same MLII timing and morphology features. One receives the recorded waveform and the other receives the band-passed signal. A second comparison replaces the reference beat centers with XQRS detections.
 
 ## Results
 
@@ -12,7 +12,7 @@ The full test uses 47,552 N/S/V/F beats from 21 held-out subjects. The paired in
 | White Gaussian noise, 0 dB | 0.4954 | 0.4835 | −0.0119 |
 | 0.33 Hz baseline drift, 0 dB | 0.5057 | 0.5234 | +0.0177 |
 
-All nine condition-level paired 95% bootstrap intervals include zero. Without added noise, XQRS scored detection F1 0.9978. The filtered pipeline scored macro-F1 0.5237 with reference positions and 0.5183 end to end. The full numerical comparisons are in [results](results/).
+The paired 95% intervals include zero in all nine conditions. On the original recordings, XQRS reached a detection F1 of 0.9978. On the filtered branch, classification macro-F1 changed from 0.5237 with reference centers to 0.5183 with XQRS misses and extra detections included. [Full result tables](results/)
 
 ![Macro-F1 under two types of noise, with paired subject intervals for filtered minus raw](results/fig_robustness.png)
 
@@ -61,10 +61,11 @@ Smoke writes to `outputs/smoke/`, the complete run to `outputs/run/`, and docume
 
 ## Build the final PDFs
 
-Create a local `identity.yaml` with four quoted strings.
+Save the cover fields in a local `identity.yaml`. Use the optional `name_native` field for a second spelling.
 
 ```yaml
 name: "Your name as it should appear on the cover"
+name_native: "Optional second spelling"
 student_id: "Your student ID"
 date: "YYYY-MM-DD"
 repository: "https://github.com/OWNER/REPOSITORY"
