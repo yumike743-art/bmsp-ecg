@@ -1,0 +1,5 @@
+measure,true,outcome,count,support,rate
+reference_filtered_classification,S,S,52,1782,0.0291806958
+reference_filtered_classification,S,N,1700,1782,0.9539842873
+xqrs_detection_without_added_noise,V,miss,124,3201,0.0387378944
+xqrs_detection_without_added_noise,N,miss,22,42182,0.0005215495

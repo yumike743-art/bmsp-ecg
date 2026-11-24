@@ -7,6 +7,7 @@ from .signal import CLASSES
 
 AXIS = (*CLASSES, "none")
 ENCODE = {name: index for index, name in enumerate(AXIS)}
+SENSITIVITY_RECORD = "213"
 
 
 def confusion(frame):
@@ -83,6 +84,43 @@ def paired_bootstrap(left, right, repetitions, seed):
     return dict(delta=float(macro_f1(batches[1].sum(0)) - macro_f1(batches[0].sum(0))),
                 lo=float(np.quantile(paired, .025)), hi=float(np.quantile(paired, .975)),
                 subjects=size, bootstrap_repetitions=repetitions)
+
+
+def write_posthoc(predictions, events, target):
+    clean = predictions.loc[predictions.noise == "clean"]
+    by_scope = []
+    for scope, block in (
+        ("all", clean),
+        ("without_213", clean.loc[clean.record_id != SENSITIVITY_RECORD]),
+    ):
+        raw = block.loc[block.branch == "raw"]
+        filtered = block.loc[block.branch == "filtered"]
+        scores = [float(macro_f1(confusion(arm))) for arm in (raw, filtered)]
+        by_scope.append(dict(
+            scope=scope, removed_record="" if scope == "all" else SENSITIVITY_RECORD,
+            beats=len(raw), fusion_beats=int(raw["true"].eq("F").sum()),
+            raw_f1=scores[0], filtered_f1=scores[1], delta=scores[1] - scores[0],
+        ))
+    pd.DataFrame(by_scope).to_csv(
+        target / "sensitivity_record_213.csv", index=False, float_format="%.10f",
+    )
+
+    filtered_s = clean.loc[(clean.branch == "filtered") & (clean["true"] == "S")]
+    counts = []
+    for label in ("S", "N"):
+        counts.append(dict(
+            measure="reference_filtered_classification", true="S", outcome=label,
+            count=int(filtered_s.pred.eq(label).sum()), support=len(filtered_s),
+        ))
+    for label in ("V", "N"):
+        reference = events.loc[events["true"] == label]
+        counts.append(dict(
+            measure="xqrs_detection_without_added_noise", true=label, outcome="miss",
+            count=int(reference.status.eq("miss").sum()), support=len(reference),
+        ))
+    errors = pd.DataFrame(counts)
+    errors["rate"] = ratio(errors["count"].to_numpy(), errors["support"].to_numpy())
+    errors.to_csv(target / "minority_errors.csv", index=False, float_format="%.10f")
 
 
 def summarize(predictions, events, cfg, target):

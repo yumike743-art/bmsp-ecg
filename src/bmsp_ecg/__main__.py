@@ -15,11 +15,13 @@ def main(argv=None):
     data.add_argument("action", choices=["fetch", "check"])
     smoke = sub.add_parser("smoke", help="Train and evaluate on six real recordings")
     run = sub.add_parser("run", help="Run the complete pre-specified experiment")
+    analyze = sub.add_parser("analyze", help="Recompute post-hoc tables from saved predictions")
+    stress = sub.add_parser("stress", help="Run the 0 dB drift detector comparison with saved models")
     report = sub.add_parser("report", help="Rebuild figures and two PDF documents")
     report.add_argument("--identity", type=Path, help="Local YAML with name, student_id, date and repository")
     report.add_argument("--submission-dir", type=Path, default=Path("submission"))
     report.add_argument("--draft", action="store_true")
-    for command in (data, smoke, run, report):
+    for command in (data, smoke, run, analyze, stress, report):
         command.add_argument("--config", type=Path, default=Path("configs/experiment.yaml"))
         command.add_argument("--data-dir", type=Path)
         command.add_argument("--output-dir", type=Path)
@@ -40,6 +42,15 @@ def main(argv=None):
 
             checksums = check_directory(root, rows, dataset["version"])
             run_experiment(cfg, root, rows, checksums, output / args.command, args.command)
+        elif args.command == "analyze":
+            from .stress import rebuild_posthoc
+
+            rebuild_posthoc(cfg, output / "run")
+        elif args.command == "stress":
+            from .stress import run_drift_stress
+
+            checksums = check_directory(root, rows, dataset["version"])
+            run_drift_stress(cfg, root, rows, checksums, output / "run")
         else:
             from .report import build_reports
 

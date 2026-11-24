@@ -20,7 +20,7 @@ from sklearn.pipeline import make_pipeline
 
 from .data import load_record, sha256
 from .matching import match_qrs
-from .metrics import summarize
+from .metrics import summarize, write_posthoc
 from .signal import CLASSES, FEATURE_NAMES, bandpass, feature_matrix, inject, symbol_classes, unit_noise, window_valid
 
 # Contains V and rare F training examples, and covers the reversed MLII column.
@@ -62,14 +62,14 @@ def reference_predictions(record, ref, cfg, branches, waveform, noise, snr):
             yield classification_frame(record, ref, retained, all_n, noise, snr, "all_n")
 
 
-def detector_events(record, ref, filtered, model, cfg):
+def detector_events(record, ref, waveform, model, cfg):
     fs = record.fs
     detections = wfdb.processing.xqrs_detect(
-        sig=filtered, fs=fs, conf=None, learn=cfg["detection"]["learn"], verbose=False,
+        sig=waveform, fs=fs, conf=None, learn=cfg["detection"]["learn"], verbose=False,
     )
-    features, valid_d = feature_matrix(filtered, detections, fs, cfg["window_s"])
+    features, valid_d = feature_matrix(waveform, detections, fs, cfg["window_s"])
     pred = model.predict(features) if len(features) else np.array([], dtype="U1")
-    valid_r = window_valid(ref.centres, len(filtered), fs, cfg["window_s"])
+    valid_r = window_valid(ref.centres, len(waveform), fs, cfg["window_s"])
     true_samples = ref.centres[valid_r]
     det_samples = detections[valid_d]
     labels = ref.labels[valid_r]
@@ -225,6 +225,8 @@ def _run(cfg, root, rows, checksums, target, scope, started):
     pd.DataFrame(noise_log).to_csv(target / "snr_audit.csv", index=False, float_format="%.10f")
     pd.DataFrame(detection_edges).to_csv(target / "detection_window_skips.csv", index=False)
     summarize(pred, events, cfg, target)
+    if scope == "run":
+        write_posthoc(pred, events, target)
     case = select_case(events, records)
     record = records[case.record_id]
     save_segment(target, "failure", record, bandpass(record.signal, record.fs, cfg["filter"]),

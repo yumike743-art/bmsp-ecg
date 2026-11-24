@@ -14,12 +14,14 @@ from scipy.signal import sosfreqz
 from .figures import build_figures
 from .layout import (COVER_LIGHT, INK, TEAL, CoverTrace, Spacer, VectorFigure,
                      build_pdf, code, heading, note, para, register_fonts, section, table)
-from .signal import CLASSES, filter_sos
+from .signal import BRANCH_LABELS, CLASSES, filter_sos
+from .stress import checked_stress
 
 TITLE = "How Much Does Filtering Help?"
 SUBTITLE = "Noise-Robust ECG Beat Classification on Unseen Subjects"
 REPORT = "BMSP_Report.pdf"
 GUIDE = "BMSP_Code_Documentation.pdf"
+NO_BANDPASS, WITH_BANDPASS = (BRANCH_LABELS[name] for name in ("raw", "filtered"))
 
 
 def f1(value):
@@ -75,6 +77,7 @@ def student_name(identity):
 
 
 def read_results(run):
+    stress = checked_stress(run)
     return {
         "meta": json.loads((run / "run_metadata.json").read_text()),
         "case": json.loads((run / "failure_meta.json").read_text()),
@@ -88,6 +91,10 @@ def read_results(run):
         "detection": pd.read_csv(run / "detection_by_record.csv", dtype={"record_id": str}).set_index("record_id"),
         "paired": pd.read_csv(run / "paired_detection.csv").set_index("comparison"),
         "snr": pd.read_csv(run / "snr_audit.csv"),
+        "sensitivity": pd.read_csv(run / "sensitivity_record_213.csv").set_index("scope"),
+        "minority": pd.read_csv(run / "minority_errors.csv").set_index(["measure", "true", "outcome"]).sort_index(),
+        "stress": (pd.read_csv(stress / "metrics.csv").set_index("branch"),
+                   pd.read_csv(stress / "paired_delta.csv").iloc[0]) if stress else None,
     }
 
 
@@ -95,7 +102,11 @@ def cover(identity, results, trace):
     n = results["meta"]
     scores = results["scores"]
     raw, filtered = (scores.loc[key].macro_f1 for key in ("reference_raw", "reference_filtered"))
-    clean = results["noise"].query("noise == 'clean'").iloc[0]
+    noise = results["noise"]
+    crossings = ((noise.lo <= 0) & (noise.hi >= 0)).sum()
+    drift = noise.query("noise == 'drift' and snr_db == '0'").iloc[0]
+    replay = (f" A separate 0 dB drift replay with XQRS changed end-to-end macro-F1 by "
+              f"{signed(results['stress'][1].delta)}." if results["stress"] else "")
     repo = identity["repository"]
     return [
         Spacer(1, 12),
@@ -114,13 +125,13 @@ def cover(identity, results, trace):
         para("Huaqiao University &nbsp;·&nbsp; Instructor Dr. DUAN Fang", after=4),
         para(f"Source code &nbsp; {link(repo) if repo else 'Public repository pending'}", after=23),
         heading("Abstract"),
-        para("Two random forests classified MIT-BIH heartbeats from MLII, one using the recorded waveform "
-             "and the other applying a 0.5–40 Hz band-pass. The comparison asked how filtering changes "
-             f"performance as noise increases. On {number(n['test_subjects'])} held-out subjects, macro-F1 "
-             f"was {f1(raw)} for the raw branch and {f1(filtered)} after filtering without added noise "
-             f"(95% paired interval for the difference {ci(clean)}). The direction changed across noise "
-             "conditions. Within the filtered branch, changing beat centers from reference annotations to "
-             f"XQRS detections yielded an end-to-end macro-F1 of {f1(scores.loc['end_to_end'].macro_f1)}."),
+        para(f"Two random forests classified MLII beats from {number(n['test_subjects'])} held-out "
+             f"MIT-BIH subjects. The noise comparison used reference beat positions. Without added noise, "
+             f"macro-F1 was {f1(raw)} for <i>{NO_BANDPASS}</i> and {f1(filtered)} for "
+             f"<i>{WITH_BANDPASS}</i>. The paired 95% intervals included zero in {crossings} of {len(noise)} "
+             f"conditions, including 0 dB baseline drift (difference {signed(drift.delta)}, {ci(drift)}). "
+             f"The primary XQRS experiment used recordings without added noise and yielded an end-to-end "
+             f"macro-F1 of {f1(scores.loc['end_to_end'].macro_f1)} with the external band-pass.{replay}"),
     ]
 
 
@@ -156,7 +167,7 @@ def acquisition(results, figure):
              f"{number(test.unmapped_qrs)} unmapped QRS beats and {number(train.qrs_without_window)}/"
              f"{number(test.qrs_without_window)} beats at record edges. Non-QRS annotations numbered "
              f"{number(train.non_qrs_events)}/{number(test.non_qrs_events)}."),
-        heading("MLII before and after filtering"),
+        heading("MLII with and without the external band-pass"),
         figure("qc"),
         note("Figure 1. Three seconds from training record 114 on a shared mV scale. "
              "Dashed lines mark reference beat times."),
@@ -171,14 +182,15 @@ def methodology(spec):
     return [
         section("Methodology"),
         heading("Band-pass filter and beat windows"),
-        para("One classifier uses the recorded MLII signal. The second applies a 0.5–40 Hz Butterworth "
-             "band-pass to each complete record. A fourth-order prototype gives four biquads for the "
+        para(f"The <i>{NO_BANDPASS}</i> branch takes the recorded MLII signal as input. "
+             f"<i>{WITH_BANDPASS}</i> applies a 0.5–40 Hz Butterworth band-pass to the complete record. "
+             "A fourth-order prototype gives four biquads for the "
              "single pass. Forward–backward application cancels phase and squares the magnitude response [4]. "
              f"The effective gains at 0.33, 0.5, 10, 40 and 75 Hz are "
              f"{', '.join(f'{g:.1f}' for g in gains)} dB, respectively."),
         para("Both branches use the same 28 timing and amplitude features. The beat window contains "
              "216 samples from −250 ms inclusive to +350 ms exclusive, relative to the beat center. "
-             "Morphology features subtract the local median from −200 to −120 ms."),
+             "For morphology, both branches subtract the local median from −200 to −120 ms."),
         table(["Feature group", "Definition and units"], [
             ["RR (4)", "Previous and next intervals between QRS positions (s), and each interval divided "
              "by its centered 11-interval median. "
@@ -219,7 +231,7 @@ def noise_results(results, figure):
     raw_f = results["class"].query("protocol == 'reference_raw' and label == 'F'").iloc[0].f1
     filtered_f = results["class"].query("protocol == 'reference_filtered' and label == 'F'").iloc[0].f1
     return [
-        section("Results under added noise"),
+        section("Results at reference beats"),
         para("To compare preprocessing alone, both classifiers used the reference beat centers. Each test "
              "record received either zero-mean white Gaussian noise or a 0.33 Hz sinusoid with a seeded "
              "phase. The signal-to-noise ratios (SNRs) were 24, 12, 6 and 0 dB. The noise scale was "
@@ -227,22 +239,24 @@ def noise_results(results, figure):
              "where signal power came from the demeaned original. Both branches received the same disturbed "
              f"waveform. The achieved SNR was within {max(discrepancy, 1e-9):.0e} dB of its target."),
         para(f"On the original recordings, predicting N for every beat gave {pct(base.accuracy)} accuracy "
-             f"and only {f1(base.macro_f1)} macro-F1. The two forests scored {f1(test.macro_f1)} "
-             f"with the recorded waveform and {f1(filt.macro_f1)} with the band-pass."),
+             f"and {f1(base.macro_f1)} macro-F1. <i>{NO_BANDPASS}</i> scored {f1(test.macro_f1)} "
+             f"and <i>{WITH_BANDPASS}</i> scored {f1(filt.macro_f1)}."),
         figure("robustness"),
-        note(f"Figure 2. Each setting uses the same {number(test.support)} beats from "
-             f"{number(results['meta']['test_subjects'])} test subjects. Δ is filtered minus raw. Bars span "
+        note(f"Figure 2. Each condition uses the same {number(test.support)} reference-position beats "
+             f"from {number(results['meta']['test_subjects'])} test subjects. Δ is with minus without "
+             "the external band-pass. Bars span "
              "the 2.5th to 97.5th percentiles of 2,000 paired subject resamples with both forests fixed. "
              "A class with a zero F1 denominator scores zero. SNR is relative to the recorded ECG."),
-        table(["Selected condition", "Raw F1", "Filtered F1", "Δ F1", "95% paired interval"], [
+        table(["Selected condition", NO_BANDPASS, WITH_BANDPASS, "Δ Macro-F1", "95% paired interval"], [
             [name, f1(row.raw_f1), f1(row.filtered_f1), signed(row.delta), ci(row)]
             for name, row in zip(["No added noise", "White noise · 0 dB", "Baseline drift · 0 dB"], extrema)
-        ], [.27, .135, .155, .13, .31], numeric=range(1, 5)),
+        ], [.225, .19, .19, .13, .265], numeric=range(1, 5)),
         Spacer(1, 7),
         note("Table 3. Estimates without added noise and at the strongest added noise level."),
-        para(f"During the drift sweep, filtered macro-F1 stayed between {f1(drift_levels.min())} and "
-             f"{f1(drift_levels.max())}. The paired intervals included zero in {crossing} of {len(noise)} "
-             f"conditions. On the original recordings, fusion F1 fell from {f1(raw_f)} to {f1(filtered_f)}, "
+        para(f"With the external band-pass, macro-F1 stayed between {f1(drift_levels.min())} and "
+             f"{f1(drift_levels.max())} across the four drift levels. "
+             f"The paired intervals included zero in {crossing} of {len(noise)} conditions. "
+             f"On the original recordings, fusion F1 changed from {f1(raw_f)} to {f1(filtered_f)} with the band-pass, "
              "the largest class-level contribution to the drop in macro-F1."),
     ]
 
@@ -263,8 +277,9 @@ def detection_results(results):
         ("end_to_end", "XQRS end to end", "All labeled beats + extra detections"),
     ]
     return [
-        section("Results after QRS detection"),
-        para("The detector comparison used the original recordings and the filtered classifier. XQRS "
+        section("XQRS results without added noise"),
+        para(f"The primary detector comparison used the recordings without added noise and the "
+             f"<i>{WITH_BANDPASS}</i> branch. XQRS "
              "from WFDB 4.3.1 ran with its default settings, including signal-based initialization and a "
              "5–20 Hz internal band-pass [5]. In this branch, detected positions set the RR intervals "
              "and waveform windows. The reference and detection branches used the same window boundaries."),
@@ -286,27 +301,103 @@ def detection_results(results):
              f"percentile of {d.p95_abs_ms:.1f} ms. Using detected positions for those same beats "
              f"changed macro-F1 by {signed(cond.delta)} (95% interval {ci(cond)}). Including errors "
              f"on all beats changed it by {signed(e2e.delta)} (95% interval {ci(e2e)})."),
-        table(["Class", "Test beats", "Always-N recall", "Raw recall", "Filtered recall",
-               "Filtered precision", "Filtered F1", "End-to-end F1"],
+        table(["Class", "Test beats", "Always-N recall", f"{NO_BANDPASS} recall", f"{WITH_BANDPASS} recall",
+               f"{WITH_BANDPASS} precision", f"{WITH_BANDPASS} F1", "End-to-end F1"],
               [[label, number(base.loc[label].support), pct(constant.loc[label].recall),
                 pct(raw.loc[label].recall), pct(base.loc[label].recall),
                 pct(base.loc[label].precision), f1(base.loc[label].f1), f1(end.loc[label].f1)]
                for label in CLASSES], [.09, .115, .145, .125, .125, .14, .12, .14], numeric=range(1, 8)),
         Spacer(1, 7),
-        note("Table 5. Class results without added noise. N includes normal and similar beats, S is "
-             "supraventricular ectopic, V is ventricular ectopic and F is fusion. The always-N, raw and "
-             "filtered reference scores use annotation centers."),
+        note("Table 5. Class results without added noise. Both band-pass columns and the always-N "
+             "baseline use reference positions. End-to-end F1 uses the external band-pass and XQRS. "
+             "N includes normal and similar beats, S is supraventricular ectopic, V is ventricular ectopic "
+             "and F is fusion."),
     ]
 
 
-def discussion(results, figure):
+def stress_results(results):
+    metrics, delta = results["stress"]
+    drift = results["noise"].query("noise == 'drift' and snr_db == '0'").iloc[0]
+    raw, filtered = (metrics.loc[branch] for branch in ("raw", "filtered"))
+    same_qrs = raw[["matched", "missed", "extra"]].equals(filtered[["matched", "missed", "extra"]])
+    detection_note = (f"Both branches matched {number(raw.matched)} QRS beats, missed "
+                      f"{number(raw.missed)} and added {number(raw.extra)} detections."
+                      if same_qrs else
+                      f"QRS F1 was {f1(raw.qrs_f1)} without and {f1(filtered.qrs_f1)} with the external band-pass.")
+    return [
+        section("XQRS with 0 dB baseline drift"),
+        para("This replay adds 0.33 Hz baseline drift at 0 dB to the same held-out recordings. Each "
+             "record receives the same injected waveform in both branches. The two saved forests are "
+             "applied without refitting. XQRS runs separately on the input of each branch, followed by "
+             "the same beat-window and classification steps."),
+        para("The matching tolerance and counting rules are the same as for recordings without "
+             "added noise. For each class, end-to-end recall is the fraction of its reference beats "
+             "that are both detected and classified correctly."),
+        table(["Branch", "QRS F1", "End-to-end macro-F1", "S recall", "V recall"], [
+            [BRANCH_LABELS[branch], f1(row.qrs_f1), f1(row.macro_f1), pct(row.s_recall), pct(row.v_recall)]
+            for branch, row in metrics.iterrows()
+        ], [.33, .12, .23, .16, .16], numeric=range(1, 5)),
+        Spacer(1, 8),
+        note(f"Table 6. Additional experiment on {number(raw.support)} four-class reference beats. "
+             "Both detector branches still use XQRS's internal preprocessing."),
+        heading("Does the estimated gain persist?"),
+        para(f"At reference positions, the 0 dB drift estimate was {signed(drift.delta)} macro-F1 "
+             f"(95% paired interval {ci(drift)}). With XQRS and with detection errors counted, the "
+             f"estimate was {signed(delta.delta)} ({ci(delta)}). The positive point estimate persisted "
+             "after automatic localization. Both intervals included zero."),
+        para(detection_note + " This comparison covers a sinusoidal drift at one noise level."),
+        note(f"The paired interval uses {number(delta.bootstrap_repetitions)} bootstrap resamples of "
+             f"the {number(delta.subjects)} held-out subjects."),
+    ]
+
+
+def classification_discussion(results, first_table):
+    matrix = results["matrix"].query("protocol == 'reference_filtered'").pivot(
+        index="true", columns="pred", values="count",
+    )
+    full, reduced = (results["sensitivity"].loc[scope] for scope in ("all", "without_213"))
+    minority = results["minority"].loc["reference_filtered_classification", "S"]
+    correct, as_n = (minority.loc[label] for label in ("S", "N"))
+    return [
+        section("Discussion"),
+        heading("Post hoc sensitivity to record 213"),
+        table(["Test records", "Beats", f"{NO_BANDPASS}<br/>Macro-F1", f"{WITH_BANDPASS}<br/>Macro-F1"], [
+            [scope, number(row.beats), f1(row.raw_f1), f1(row.filtered_f1)]
+            for scope, row in (("All test records", full), ("Excluding record 213", reduced))
+        ], [.28, .14, .29, .29], numeric=range(1, 4)),
+        Spacer(1, 8),
+        note(f"Table {first_table}. Recomputed from saved predictions at reference beat positions "
+             "without added noise. The full test set remains the primary result."),
+        para(f"Record 213 contributed {number(full.fusion_beats - reduced.fusion_beats)} of the "
+             f"{number(full.fusion_beats)} fusion beats in the full test set. The with-minus-without "
+             f"difference was {signed(full.delta)} on the full set and {signed(reduced.delta)} "
+             "after removing record 213. The two branches were nearly tied on the reduced set. "
+             "The observed difference without added noise is sensitive to the test cohort's record composition."),
+        heading("Classification errors at reference beats"),
+        table(["Reference / prediction", *CLASSES], [
+            [label, *[number(matrix.loc[label, pred]) for pred in CLASSES]]
+            for label in CLASSES
+        ], [.36, .16, .16, .16, .16], numeric=range(1, 5)),
+        Spacer(1, 8),
+        note(f"Table {first_table + 1}. {WITH_BANDPASS} at reference positions without added noise. "
+             "Rows are annotated classes and columns are predictions."),
+        para(f"Of the {number(correct.support)} S beats, the classifier labeled {number(correct['count'])} "
+             f"as S and {number(as_n['count'])} as N. The S-to-N error is the main classification problem "
+             "for S in this test set. A supraventricular ectopic beat can resemble N in QRS shape [3], "
+             "so the next feature comparison should test what helps distinguish S from N."),
+    ]
+
+
+def detection_discussion(results, figure, table_number):
     case = results["case"]
     label = case["focus_label"]
     t0, t1, centre = (case[key] / case["fs"] for key in ("start", "stop", "focus_sample"))
     condition = ("A missed reference beat" if case["focus_status"] == "miss" else
                  f"A reference beat predicted as {case['focus_prediction']}")
     confusion = results["matrix"].query("protocol == 'end_to_end'").pivot(index="true", columns="pred", values="count")
-    base = results["class"].query("protocol == 'reference_filtered'").set_index("label")
+    errors = results["minority"].loc["xqrs_detection_without_added_noise"]
+    v_miss, n_miss = (errors.loc[(label, "miss")] for label in ("V", "N"))
+    qrs = results["detection"].loc["ALL"]
     focus = case["focus_sample"]
     references = results["case_events"].ref_sample
     detections = results["case_events"].det_sample
@@ -325,8 +416,7 @@ def discussion(results, figure):
         case_insight = ("A missed center changes the RR interval used for neighboring detections. "
                         "Both the recovered timing and the choice of waveform center enter the classifier.")
     return [
-        section("Discussion"),
-        heading("A missed ventricular beat"),
+        section("Discussion of missed beats"),
         figure("failure"),
         note(f"Figure 3. {condition} ({label}) at {centre:.3f} s in test record "
              f"{case['record_id']} (sample {focus:,}). The excerpt spans [{t0:.3f}, {t1:.3f}) s. "
@@ -334,18 +424,17 @@ def discussion(results, figure):
              "The rule selects the earliest eligible V miss in the lowest-numbered test record, "
              "at least two seconds from a record edge."),
         para(case_insight),
+        para(f"XQRS reached a pooled detection F1 of {f1(qrs.f1)} without added noise. "
+             f"It missed {number(v_miss['count'])}/{number(v_miss.support)} V beats "
+             f"({pct(v_miss.rate)}) and {number(n_miss['count'])}/{number(n_miss.support)} N beats "
+             f"({100 * n_miss.rate:.3f}%). The missed-beat rate was appreciably higher for V."),
         table(["Reference / prediction", "N", "S", "V", "F", "No detection"],
               [[label if label != "none" else "Extra detection",
                 *[number(confusion.loc[label, pred]) for pred in (*CLASSES, "none")]]
                for label in (*CLASSES, "none")], [.25, .145, .12, .12, .12, .245], numeric=range(1, 6)),
         Spacer(1, 7),
-        note("Table 6. End-to-end confusion counts. Misses occupy the last column and extra detections "
-             "the last row. Matches to excluded reference classes count only toward QRS detection."),
-        heading("Which classes caused errors?"),
-        para(f"At the reference centers, the filtered classifier recalled {pct(base.loc['V'].recall)} of V beats, "
-             f"{pct(base.loc['S'].recall)} of S beats and {pct(base.loc['F'].recall)} of fusion beats. A "
-             "supraventricular ectopic beat can have a narrow QRS, so its shape alone may resemble the N class [3]. "
-             "Fusion can resemble either component. The experiment did not isolate the effect of individual features."),
+        note(f"Table {table_number}. End-to-end errors without added noise. Misses occupy the last column "
+             "and extra detections the last row. Matches to excluded classes count toward detection only."),
     ]
 
 
@@ -366,29 +455,27 @@ REFERENCES = [
 
 
 def conclusion(results):
-    noise, counts = (results[key] for key in ("noise", "counts"))
+    noise = results["noise"]
     drift = noise.query("noise == 'drift' and snr_db == '0'").iloc[0]
-    test = counts.query("partition == 'test'")
-    concentration = test.sort_values("F", ascending=False).iloc[0]
+    crossings = ((noise.lo <= 0) & (noise.hi >= 0)).sum()
     e2e = results["paired"].loc["reference_to_end_to_end"]
-    matrix = results["matrix"].query("protocol == 'end_to_end'")
-    missed_v = matrix.query("true == 'V' and pred == 'none'").iloc[0]["count"]
-    missed_total = matrix.query("pred == 'none'")["count"].sum()
+    replay = results["stress"][1] if results["stress"] else None
+    replay_text = (f" The separate 0 dB drift replay gave an end-to-end difference of "
+                   f"{signed(replay.delta)} ({ci(replay)})." if replay is not None else "")
     return [
         section("Conclusion"),
-        para("The filter attenuated the 0.33 Hz drift, but the classification benefit was uncertain. "
-             f"At 0 dB drift the estimated gain was {signed(drift.delta)}, with a 95% paired interval "
-             f"of {ci(drift)}. The raw branch also subtracts a local baseline, which can reduce slow offsets. "
-             "White noise spans the passband and can affect slopes and amplitudes after filtering."),
-        para(f"On unperturbed records, XQRS localization changed classification very little among matched "
-             f"beats. With misses and extra detections included, macro-F1 changed by {signed(e2e.delta)}. "
-             f"V beats accounted for {number(missed_v)} of {number(missed_total)} missed four-class labels."),
+        para(f"With reference positions fixed, the 95% paired intervals included zero in "
+             f"{crossings} of {len(noise)} conditions. At 0 dB baseline drift the estimated gain "
+             f"from the external band-pass was {signed(drift.delta)} macro-F1 (95% interval {ci(drift)}). "
+             "Both branches subtract a local baseline for morphology. White noise still overlaps the passband."),
+        para(f"In the primary end-to-end experiment without added noise, replacing reference positions "
+             f"with XQRS and counting misses and extra detections changed macro-F1 by {signed(e2e.delta)}."
+             f"{replay_text}"),
         heading("Limits of the comparison"),
-        para(f"Record {int(concentration.record_id)} supplied {number(concentration.F)} of the "
-             f"{number(test.F.sum())} test fusion beats. The paired bootstrap captures variation across "
-             "this test cohort for the fitted models and fixed noise draws. The noise tests used synthetic "
-             "drift and white noise. A test with recorded electrode motion or muscle artifact would address "
-             "a different use case [6]. Detection was evaluated on the original recordings only."),
+        para("The no-added-noise comparison was sensitive to one record with most of the fusion beats. "
+             "The paired bootstrap captures this cohort's variation for the fitted models and fixed "
+             "noise draws. The noise was synthetic. A test with recorded electrode motion or muscle "
+             "artifact would address a different use case [6]."),
         note("Codex assisted with implementation, editing and figure preparation. The visualization "
              "workflow drew on Scientific Agent Skills [7]."),
         heading("References"),
@@ -433,6 +520,8 @@ def guide_pages(identity, results):
                 "uv run python -m bmsp_ecg data fetch --config configs/experiment.yaml",
                 "uv run python -m bmsp_ecg smoke --config configs/experiment.yaml",
                 "uv run python -m bmsp_ecg run --config configs/experiment.yaml",
+                "uv run python -m bmsp_ecg stress --config configs/experiment.yaml",
+                "uv run python scripts/verify_results.py outputs/run",
                 "uv run python -m bmsp_ecg report --config configs/experiment.yaml --draft",
             ]),
             Spacer(1, 12),
@@ -440,8 +529,8 @@ def guide_pages(identity, results):
                  "<font name='Mono'>.hea</font> and <font name='Mono'>.atr</font> files. It checks each "
                  "against the published SHA-256 list and reuses files that already match. MIT-BIH is available "
                  f"under the Open Data Commons Attribution License v1.0. {link('https://physionet.org/content/mitdb/1.0.0/', 'PhysioNet dataset')}."),
-            note("The smoke command checks three training and three test records with 12 trees per branch. "
-                 "Run the full experiment before building the report."),
+            note("Smoke writes to outputs/smoke/. The full experiment writes to outputs/run/. "
+                 "Stress reuses the saved models and writes to outputs/run/stress/. Both PDFs go to submission/."),
         ],
         [
             section("Inputs and outputs"),
@@ -459,6 +548,9 @@ def guide_pages(identity, results):
                  "TP/FP/FN and confusion counts. The none category accounts for unmatched events."],
                 ["outputs/run/noise_metrics.csv, snr_audit.csv, paired_detection.csv", "Noise grid, calibration "
                  "and paired bootstrap intervals for filtering and detection."],
+                ["outputs/run/sensitivity_record_213.csv, minority_errors.csv",
+                 "Post hoc clean reference-position comparison and minority-class counts."],
+                ["outputs/run/stress/", "0 dB drift detector ledger, paired waveform audit and metrics."],
                 ["outputs/run/detection_by_record.csv", "Detection totals, offsets, extra detections and misses "
                  "for each record and pooled across test records."],
                 ["outputs/run/*_waveform.csv, figures/", "Source samples, event tables, case metadata and "
@@ -477,9 +569,12 @@ def guide_pages(identity, results):
         [
             section("Verification and submission"),
             heading("Verify the evaluation ledger"),
-            para("This command recalculates the metrics from saved predictions. It also checks the subject "
-                 "split, paired noise inputs, SNR calibration and one-to-one QRS matches."),
+            para("The verifier recalculates the main results, the record 213 sensitivity table, the "
+                 "minority-class counts and the drift replay metrics from saved predictions and matches."),
             code(["uv run python scripts/verify_results.py outputs/run"]),
+            para("To rebuild the two post hoc tables from a saved full run, use the analyze command. "
+                 "It reads prediction files only."),
+            code(["uv run python -m bmsp_ecg analyze --config configs/experiment.yaml"]),
             Spacer(1, 12),
             heading("Build PDFs with local cover details"),
             para("Save a local <font name='Mono'>identity.yaml</font> with quoted "
@@ -528,9 +623,16 @@ def build_reports(cfg, run, target, identity_path, draft):
     trace = CoverTrace(qc.time_s.to_numpy(), qc.raw_mV.to_numpy(), qc_meta["record_id"])
     pages = [
         cover(identity, results, trace), acquisition(results, figure), methodology(saved_config),
-        noise_results(results, figure), detection_results(results), discussion(results, figure),
-        conclusion(results),
+        noise_results(results, figure), detection_results(results),
     ]
+    if results["stress"]:
+        pages.append(stress_results(results))
+    first_table = 7 if results["stress"] else 6
+    pages.extend([
+        classification_discussion(results, first_table),
+        detection_discussion(results, figure, first_table + 2),
+        conclusion(results),
+    ])
     build_pdf(target / REPORT, pages, TITLE + " " + SUBTITLE, "Course project report",
               identity["name"], draft, placements, cover_band=True)
     build_pdf(target / GUIDE, guide_pages(identity, results), "BMSP Code Documentation",

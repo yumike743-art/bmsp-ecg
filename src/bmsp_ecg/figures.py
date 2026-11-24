@@ -12,6 +12,8 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from .signal import BRANCH_LABELS
+
 TEAL = "#126659"
 ORANGE = "#9B4D28"
 INK = "#152C3A"
@@ -52,8 +54,10 @@ def robustness(run, folder):
         x = np.arange(len(subset))
         top, bottom = axs[:, j]
         styles = [
-            (subset.raw_f1, "Raw waveform", dict(color=ORANGE, marker="s", mfc="white", lw=1.35, ms=4.5, ls="--")),
-            (subset.filtered_f1, "External band-pass", dict(color=TEAL, marker="o", lw=1.65, ms=4.6, ls="-")),
+            (subset.raw_f1, BRANCH_LABELS["raw"],
+             dict(color=ORANGE, marker="s", mfc="white", lw=1.35, ms=4.5, ls="--")),
+            (subset.filtered_f1, BRANCH_LABELS["filtered"],
+             dict(color=TEAL, marker="o", lw=1.65, ms=4.6, ls="-")),
         ]
         for values, label, style in styles:
             top.plot(x[1:], values.iloc[1:], label=label, **style)
@@ -96,8 +100,10 @@ def waveform(run, folder, name):
     limits = wave[["raw_mV", "filtered_mV"]].to_numpy()
     low, high = limits.min(), limits.max()
     room = max(.1, .18 * (high - low))
-    for ax, label, title, color in zip(axs, ["raw_mV", "filtered_mV"],
-                                      ["A  Raw MLII", "B  Band-passed MLII"], [ORANGE, TEAL]):
+    for ax, label, title, color in zip(
+        axs, ["raw_mV", "filtered_mV"],
+        [f"A  {BRANCH_LABELS['raw']}", f"B  {BRANCH_LABELS['filtered']}"], [ORANGE, TEAL],
+    ):
         ax.yaxis.grid(True, color=GRID, lw=.6, zorder=0)
         if is_failure:
             ax.axvspan(focus - tolerance, focus + tolerance, color="#ECE0CA", alpha=.83, lw=0)

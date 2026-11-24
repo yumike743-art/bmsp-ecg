@@ -7,6 +7,7 @@ from scipy import signal as dsp
 from scipy.ndimage import median_filter
 
 CLASSES = ("N", "S", "V", "F")
+BRANCH_LABELS = {"raw": "No external band-pass", "filtered": "With external band-pass"}
 RR_NAMES = ("rr_previous_s", "rr_next_s", "rr_previous_over_local", "rr_next_over_local")
 MORPH_NAMES = (
     "centre_mV", "qrs_min_mV", "qrs_max_mV", "qrs_peak_to_peak_mV", "qrs_rms_mV",

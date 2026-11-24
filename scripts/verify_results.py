@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import yaml
 from sklearn.metrics import confusion_matrix, f1_score, precision_recall_fscore_support
+from bmsp_ecg.stress import checked_stress
 
 CLASSES = ["N", "S", "V", "F"]
 AXIS = [*CLASSES, "none"]
@@ -57,6 +58,94 @@ def check_interval(before, after, expected, draws, groups):
     np.testing.assert_allclose(measured, [expected.lo, expected.hi], rtol=0, atol=1e-9)
     assert expected.subjects == len(groups)
     assert expected.bootstrap_repetitions == len(draws)
+
+
+def check_posthoc(root, reference, events):
+    table = read(root, "sensitivity_record_213.csv", keep_default_na=False).set_index("scope")
+    assert list(table.index) == ["all", "without_213"]
+    for scope, omitted in (("all", ""), ("without_213", "213")):
+        raw = reference["raw"].loc[reference["raw"].record_id != omitted]
+        filtered = reference["filtered"].loc[reference["filtered"].record_id != omitted]
+        row = table.loc[scope]
+        assert row.removed_record == omitted
+        assert row.beats == len(raw) == len(filtered)
+        assert row.fusion_beats == raw["true"].eq("F").sum()
+        scores = [f1_score(block["true"], block.pred, labels=CLASSES, average="macro", zero_division=0)
+                  for block in (raw, filtered)]
+        np.testing.assert_allclose([row.raw_f1, row.filtered_f1, row.delta],
+                                   [*scores, scores[1] - scores[0]], rtol=0, atol=1e-9)
+    errors = read(root, "minority_errors.csv").set_index(["measure", "true", "outcome"])
+    assert len(errors) == 4
+    for measure, actual, outcome in (
+        ("reference_filtered_classification", "S", "S"),
+        ("reference_filtered_classification", "S", "N"),
+        ("xqrs_detection_without_added_noise", "V", "miss"),
+        ("xqrs_detection_without_added_noise", "N", "miss"),
+    ):
+        frame, outcome_field = (events, "status") if outcome == "miss" else (reference["filtered"], "pred")
+        block = frame.loc[frame["true"] == actual]
+        row = errors.loc[(measure, actual, outcome)]
+        count = block[outcome_field].eq(outcome).sum()
+        assert row["count"] == count and row.support == len(block)
+        assert np.isclose(row.rate, count / len(block), rtol=0, atol=1e-9)
+    print("Verified the record 213 sensitivity scores and minority-class error counts.")
+
+
+def check_detection(ledger, tolerance):
+    counts = ledger.status.value_counts()
+    tp, fp, fn = [int(counts.get(key, 0)) for key in ("matched", "false_positive", "miss")]
+    assert tp + fp + fn == len(ledger)
+    assert not ledger.dropna(subset=["ref_sample"]).duplicated(["record_id", "ref_sample"]).any()
+    assert not ledger.dropna(subset=["det_sample"]).duplicated(["record_id", "det_sample"]).any()
+    matched = ledger[ledger.status == "matched"]
+    shift = matched.det_sample - matched.ref_sample
+    assert np.all(shift.abs() <= tolerance) and np.array_equal(shift, matched.shift_samples)
+    return tp, fp, fn, matched, shift
+
+
+def check_stress(root, events, tolerance, snr, draws, groups):
+    folder = checked_stress(root)
+    if folder is None:
+        print("0 dB drift detector replay absent; use the stress command to generate it.")
+        return
+    metadata = json.loads((folder / "provenance.json").read_text())
+    assert metadata["noise"] == "drift" and metadata["target_db"] == 0
+    ledger = read(folder, "events.csv.gz", dtype=INT_DTYPE)
+    metrics = read(folder, "metrics.csv").set_index("branch")
+    audit = read(folder, "noise_audit.csv", dtype={"record_id": str})
+    assert not audit.duplicated(["record_id", "branch"]).any()
+    source = snr.query("noise == 'drift' and target_db == 0").copy()
+    source["record_id"] = source.record_id.astype(str)
+    paired_snr = audit.merge(source[["record_id", "actual_db"]], on="record_id", validate="many_to_one")
+    assert len(paired_snr) == len(audit) == len(source) * 2
+    np.testing.assert_allclose(paired_snr.actual_db_x, paired_snr.actual_db_y, rtol=0, atol=1e-9)
+    assert audit.shared_input_sha256.str.fullmatch(r"[0-9a-f]{64}").all()
+    hashes = audit.pivot(index="record_id", columns="branch", values="shared_input_sha256")
+    assert hashes.raw.notna().all() and hashes.raw.equals(hashes.filtered)
+
+    key = ["record_id", "ref_sample", "true"]
+    reference = events.dropna(subset=["ref_sample"])[key].sort_values(key, ignore_index=True)
+    scored, scores = {}, {}
+    assert set(ledger.branch) == set(metrics.index) == {"raw", "filtered"}
+    for branch in ("raw", "filtered"):
+        block = ledger[ledger.branch == branch]
+        actual = block.dropna(subset=["ref_sample"])[key].sort_values(key, ignore_index=True)
+        pd.testing.assert_frame_equal(reference, actual)
+        tp, fp, fn, _, _ = check_detection(block, tolerance)
+        end = block.loc[block["true"].isin(CLASSES) | (block.status == "false_positive")]
+        _, recall, f1, support = precision_recall_fscore_support(
+            end["true"], end.pred, labels=CLASSES, zero_division=0,
+        )
+        row = metrics.loc[branch]
+        assert (row.support, row.matched, row.missed, row.extra) == (support.sum(), tp, fn, fp)
+        np.testing.assert_allclose([row.qrs_f1, row.macro_f1, row.s_recall, row.v_recall],
+                                   [2 * tp / (2 * tp + fn + fp), f1.mean(), recall[1], recall[2]],
+                                   rtol=0, atol=1e-9)
+        scored[branch], scores[branch] = end, f1.mean()
+    delta = read(folder, "paired_delta.csv").iloc[0]
+    assert np.isclose(delta.delta, scores["filtered"] - scores["raw"], rtol=0, atol=1e-9)
+    check_interval(scored["raw"], scored["filtered"], delta, draws, groups)
+    print(f"Verified {len(ledger):,} additional detection rows and the 0 dB drift results.")
 
 
 def validate(root):
@@ -123,15 +212,7 @@ def validate(root):
     fs = config["dataset"]["fs_hz"]
     tolerance = round(fs * config["detection"]["tolerance_ms"] / 1000)
     for rid, block in [("ALL", events), *events.groupby("record_id")]:
-        matched = block[block.status == "matched"]
-        n_tp = len(matched)
-        n_fp = len(block[block.status == "false_positive"])
-        n_fn = len(block[block.status == "miss"])
-        assert n_tp + n_fp + n_fn == len(block)
-        assert not block.dropna(subset=["ref_sample"]).duplicated(["record_id", "ref_sample"]).any()
-        assert not block.dropna(subset=["det_sample"]).duplicated(["record_id", "det_sample"]).any()
-        shift = matched.det_sample - matched.ref_sample
-        assert np.all(shift.abs() <= tolerance) and np.array_equal(shift, matched.shift_samples)
+        n_tp, n_fp, n_fn, matched, shift = check_detection(block, tolerance)
         for key, value in zip(("tp", "fp", "fn", "matched_excluded"), (
             n_tp, n_fp, n_fn, (~matched["true"].isin(CLASSES)).sum(),
         )):
@@ -169,6 +250,8 @@ def validate(root):
     focus = events[(events.record_id == case["record_id"]) & (events.ref_sample == case["focus_sample"])]
     assert len(focus) == 1 and focus.iloc[0].status == case["focus_status"]
     assert case["start"] < case["focus_sample"] < case["stop"]
+    check_posthoc(root, computed, events)
+    check_stress(root, events, tolerance, snr, draws, groups)
     print(f"Verified {len(training):,} training indices, {len(predictions):,} classifications, "
           f"{len(events):,} detection rows, {len(noise)} paired noise settings and all metrics.")
     return summary
@@ -180,7 +263,10 @@ def compare(first, second):
         "detection_events.csv.gz", "summary.csv", "per_class.csv", "confusion.csv", "noise_metrics.csv",
         "paired_detection.csv", "detection_by_record.csv", "detection_window_skips.csv", "snr_audit.csv",
         "qc_waveform.csv", "failure_waveform.csv", "failure_meta.json", "experiment.yaml", "split.csv",
+        "sensitivity_record_213.csv", "minority_errors.csv",
     ]
+    if (first / "stress").is_dir() or (second / "stress").is_dir():
+        names += ["stress/events.csv.gz", "stress/noise_audit.csv", "stress/metrics.csv", "stress/paired_delta.csv"]
     for name in names:
         assert (first / name).read_bytes() == (second / name).read_bytes(), name
     print(f"Replayed {len(names)} files byte-for-byte, including beat indices and per-beat predictions.")
